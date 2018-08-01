@@ -9,6 +9,11 @@
  */
 package com.amazon.asksdk.helloworld;
 
+import com.google.gson.JsonObject;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.stream.Collectors;
+import org.apache.http.client.ResponseHandler;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -30,6 +35,11 @@ import com.amazon.speech.ui.OutputSpeech;
  */
 public class HelloWorldSpeechlet implements SpeechletV2 {
     private static final Logger log = LoggerFactory.getLogger(HelloWorldSpeechlet.class);
+
+    int count = 0;
+    String meetingName = null;
+
+    PooledHttpRequestMaker pooledHttpRequestMaker = new PooledHttpRequestMaker();
 
     @Override
     public void onSessionStarted(SpeechletRequestEnvelope<SessionStartedRequest> requestEnvelope) {
@@ -53,9 +63,13 @@ public class HelloWorldSpeechlet implements SpeechletV2 {
 
         Intent intent = request.getIntent();
         String intentName = (intent != null) ? intent.getName() : null;
-
-        if ("HelloWorldIntent".equals(intentName)) {
-            return getHelloResponse();
+        log.info("onIntent intentName :"  + intentName) ;
+        if ("StartMeetingIntent".equals(intentName)) {
+            return getStartResponse(intent);
+        }else if ("DuringMeeting".equals(intentName)) {
+            return getDuringMeeting(intent);
+        }else if ("EndMeetingIntent".equals(intentName)) {
+            return getEndResponse(intent);
         } else if ("AMAZON.HelpIntent".equals(intentName)) {
             return getHelpResponse();
         } else {
@@ -76,7 +90,7 @@ public class HelloWorldSpeechlet implements SpeechletV2 {
      * @return SpeechletResponse spoken and visual response for the given intent
      */
     private SpeechletResponse getWelcomeResponse() {
-        String speechText = "Welcome to the Alexa Skills Kit, you can say hello";
+        String speechText = "Welcome to the Hike Meet. You can make meeting notes with me.";
         return getAskResponse("HelloWorld", speechText);
     }
 
@@ -85,11 +99,128 @@ public class HelloWorldSpeechlet implements SpeechletV2 {
      *
      * @return SpeechletResponse spoken and visual response for the given intent
      */
-    private SpeechletResponse getHelloResponse() {
-        String speechText = "Hello world";
+    private SpeechletResponse getStartResponse(Intent intent) {
+
+        meetingName = intent.getSlot("meetingName").getValue();
+        String speechText;
+        if(meetingName == null || meetingName.equalsIgnoreCase("dummy")){
+            speechText = "I couldn't catch it. Please repeat.";
+            meetingName = null;
+        }
+        else {
+            JsonObject map = new JsonObject();
+            map.addProperty("meeting_name",meetingName);
+            Integer responseCode = -1;
+            try {
+                responseCode = pooledHttpRequestMaker
+                    .executeHttpPost("http://staging.im.hike.in/v1/alexa/start-meeting", map.toString(),
+                        new JSONResponseHandler(),
+                        "application/json");
+
+                if(responseCode == 200){
+                    speechText = "I've started the meeting " + meetingName + ". You can, now, start making notes for this meeting.";
+                }
+                else {
+                    speechText = "There was some problem starting the meeting. Please try again.";
+                    meetingName = null;
+                }
+            }
+            catch (Exception e){
+                log.error("problem starting the meeting", e);
+                speechText = "There was some problem starting the meeting. Please try again.";
+                meetingName = null;
+            }
+        }
+
+
 
         // Create the Simple card content.
-        SimpleCard card = getSimpleCard("HelloWorld", speechText);
+        SimpleCard card = getSimpleCard("Start meeting notes", speechText);
+
+        // Create the plain text output.
+        PlainTextOutputSpeech speech = getPlainTextOutputSpeech(speechText);
+
+        return SpeechletResponse.newTellResponse(speech, card);
+    }
+
+    /**
+     * Creates a {@code SpeechletResponse} for the hello intent.
+     *
+     * @return SpeechletResponse spoken and visual response for the given intent
+     * @param intent
+     */
+    private SpeechletResponse getEndResponse(Intent intent) {
+        String speechText;
+        Integer responseCode = -1;
+        try {
+            responseCode = pooledHttpRequestMaker
+                .executeHttpPost("http://staging.im.hike.in/v1/alexa/end-meeting", null, null, null,
+                    new JSONResponseHandler(),
+                    "application/json");
+
+            if(responseCode == 200){
+                speechText = "I've sent you a hike checklist for the tasks assigned. I've also mailed you the minutes of meeting";
+            }
+            else {
+                speechText = "There was some problem starting the meeting. Please try again.";
+                meetingName = null;
+            }
+        }
+        catch (Exception e){
+            log.error("problem finishing the meeting", e);
+            speechText = "There was some problem finishing the meeting. Please try again.";
+        }
+
+        // Create the Simple card content.
+        SimpleCard card = getSimpleCard("Meeting Finished", speechText);
+
+        // Create the plain text output.
+        PlainTextOutputSpeech speech = getPlainTextOutputSpeech(speechText);
+        count = 0;
+        return SpeechletResponse.newTellResponse(speech, card);
+    }
+
+    /**
+     * Creates a {@code SpeechletResponse} for the hello intent.
+     *
+     * @return SpeechletResponse spoken and visual response for the given intent
+     * @param intent
+     */
+    private SpeechletResponse getDuringMeeting(Intent intent) {
+        String speechText;
+        if(meetingName == null || meetingName.equalsIgnoreCase("dummy") || meetingName.equalsIgnoreCase("")){
+            speechText = "Please start a meeting before making notes.";
+        }
+        else {
+            String note = intent.getSlot("task").getValue();
+            log.error(note);
+
+            Integer responseCode = -1;
+            try {
+                JsonObject map = new JsonObject();
+                map.addProperty("note",note);
+                responseCode = pooledHttpRequestMaker
+                    .executeHttpPost("http://staging.im.hike.in/v1/alexa/note", map.toString(),
+                        new JSONResponseHandler(),
+                        "application/json");
+
+                if(responseCode == 200){
+                    count++;
+                    speechText = "I've noted task " + count;
+                }
+                else {
+                    speechText = "There was some problem noting the task. Please try again.";
+                    meetingName = null;
+                }
+            }
+            catch (Exception e){
+                log.error("problem noting the task", e);
+                speechText = "There was some problem noting the task. Please try again.";
+            }
+        }
+
+        // Create the Simple card content.
+        SimpleCard card = getSimpleCard("RESPONSE", speechText);
 
         // Create the plain text output.
         PlainTextOutputSpeech speech = getPlainTextOutputSpeech(speechText);
